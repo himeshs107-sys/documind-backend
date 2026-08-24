@@ -1,0 +1,43 @@
+# Without this file, the Dockerfile's `COPY . .` sends *everything* in the
+# build context into the image -- most importantly .env, which would bake
+# real secrets (SECRET_KEY, DATABASE_URL, API keys) directly into an image
+# layer. Anyone who ever pulls that image, even after the file is later
+# "removed" in a later layer, can still extract it from the layer history.
+# Real config comes from Railway's environment variables instead (see
+# README.md's deployment notes) -- .env is strictly local-dev-only.
+
+# Secrets -- never bake these into an image layer.
+.env
+.env.*
+!.env.example
+
+# Python environments / caches -- huge, and irrelevant to the image (deps
+# come from requirements.txt via pip inside the build instead).
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Git metadata -- large, and the image has no use for repo history.
+.git/
+.gitignore
+
+# Local runtime data -- shouldn't ship whatever happens to exist on the
+# machine running `docker build`; the container creates its own uploads/
+# directory fresh (see Dockerfile's `RUN mkdir -p uploads`) and gets its own
+# database from DATABASE_URL, not a stale local file.
+uploads/*
+!uploads/.gitkeep
+test_uploads/
+*.db
+
+# Editor/OS cruft.
+.DS_Store
+.vscode/
+.idea/
+
+# Dev-only docs -- not needed for the app to run.
+README.md

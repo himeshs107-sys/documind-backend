@@ -1,0 +1,31 @@
+# Install these only if you want real embeddings and/or real LLM-generated
+# answers instead of the built-in zero-dependency mock providers.
+# See README.md -> "Switching from mock mode".
+#
+#   pip install -r requirements-optional.txt
+
+# EMBEDDING_PROVIDER=local
+sentence-transformers==3.1.1
+
+# LLM_PROVIDER=openai and/or EMBEDDING_PROVIDER=openai (same package, same
+# OPENAI_API_KEY, covers both)
+openai==1.51.0
+
+# LLM_PROVIDER=anthropic
+anthropic==0.36.1
+
+# OCR_ENABLED=true — for scanned/image-only PDF pages. Also requires the
+# Tesseract and Poppler system binaries (NOT installable via pip) — see
+# README.md -> "Enabling OCR" for OS-specific install commands.
+pytesseract==0.3.13
+pdf2image==1.17.0
+
+# DATABASE_URL=postgresql+psycopg://... — switches Chunk.embedding to a
+# real pgvector column and vector search to an HNSW-indexed query in
+# Postgres instead of SQLite's Python-loop cosine search. See README.md ->
+# "Migrating to Postgres + pgvector".
+# NOTE: psycopg[binary] and pgvector moved to requirements.txt (core) since
+# Postgres is the production target — kept listed here too as documentation
+# of *why* they're needed.
+psycopg[binary]==3.2.3
+pgvector==0.3.4
