@@ -19,6 +19,8 @@ uvicorn app.main:app --reload
 
 The API is now at `http://localhost:8000`, with interactive docs at `http://localhost:8000/docs`. A `documind.db` SQLite file is created automatically on first run — no separate database setup needed.
 
+> **This SQLite auto-create is local-development convenience only — it is not what should run in the cloud.** See "Deploying to the cloud" below before pushing this anywhere like Railway; a deploy with no `DATABASE_URL` set will silently boot on the same ephemeral SQLite default, which does not survive a restart/redeploy on most PaaS platforms (Railway included) since their container filesystems aren't persistent. That's a real footgun, not a hypothetical one — it's exactly what happens if you deploy this repo as-is without also setting `DATABASE_URL`.
+
 To point the DocuMind frontend at this backend: in the frontend's `.env`, set `VITE_API_BASE_URL=http://localhost:8000/api` and `VITE_USE_MOCKS=false`.
 
 > **Never commit `.env`.** It's already listed in `.gitignore`, and this repo intentionally does *not* ship a committed `.env` — only `.env.example` (placeholder values, safe to commit). Once you set a real `SECRET_KEY` and/or `OPENAI_API_KEY`/`ANTHROPIC_API_KEY` in your local `.env`, those are secrets: keep them out of version control and out of anything you paste into a chat, ticket, or PR description.
@@ -228,6 +230,45 @@ Nothing else needs to change — `rag_service.py`, the API routers, and the fron
 
 `init_db()` building the index at startup is itself a stopgap matching this app's "mock-first, real infra later" pattern (see `database.py`'s docstring) — for a real deployment, move both the table creation and the index into a proper Alembic migration instead, per "Notes / next steps" below.
 
+### Deploying to the cloud (Railway + Supabase)
+
+The production shape this repo is built toward:
+
+```
+Railway
+   │
+   │ FastAPI
+   ▼
+Supabase PostgreSQL
+   │
+   └── pgvector
+```
+
+Railway runs the FastAPI container (built from the `Dockerfile` in this repo); Supabase hosts the actual database — Postgres with the `pgvector` extension enabled, which is where `chunks.embedding` lives as a real `vector` column with an HNSW index (see the migration section above for the mechanism).
+
+**Before deploying, set `DATABASE_URL` on the Railway service** to Supabase's pooled connection string (Project Settings → Database → Connection string → *Session pooler*, not the direct `:5432` connection — Railway's outbound IPs aren't static, and the pooler is also better suited to a web backend's connection pattern than a direct one):
+
+```
+DATABASE_URL=postgresql+psycopg://postgres.<project-ref>:<password>@aws-0-<region>.pooler.supabase.com:6543/postgres
+```
+
+Do this *before* the first deploy, or immediately after — not "later." Skipping it doesn't fail loudly; the app boots fine on the SQLite fallback either way (see the warning in "Getting started" above), and the difference only becomes visible the moment the container restarts and every uploaded document and conversation is gone. `GET /health`'s `vector_store` field (see below) is the fastest way to confirm which one is actually active on a running deployment: `"ok"` means real Postgres+pgvector, `"not_configured"` means it's still on the SQLite fallback.
+
+Also set a real `SECRET_KEY` (the `.env.example` placeholder is not safe to run with) — generate one with `python -c "import secrets; print(secrets.token_urlsafe(48))"`.
+
+## Health check
+
+`GET /health` reports each dependency independently rather than a single unconditional `{"status": "ok"}`, so "the process is up" and "the app can actually do its job" don't get conflated:
+
+```json
+{"status": "ok", "app": "DocuMind API", "database": "ok", "vector_store": "ok"}
+```
+
+- `database`: a real `SELECT 1` round-trip against whatever `DATABASE_URL` points at.
+- `vector_store`: `"not_configured"` on SQLite (expected — no separate vector store to speak of, not a failure). On Postgres, actually queries `pg_extension` rather than trusting the URL scheme alone, since that only proves the app is *talking to* a Postgres server, not that `pgvector` is genuinely enabled there.
+
+Returns HTTP `200` when healthy, `503` when anything's actually broken — point Railway's healthcheck path at `/health` (Service Settings → Deploy → Healthcheck Path) so a broken deploy (bad DB credentials, missing `pgvector` extension, ...) gets caught and rolled back automatically instead of going live silently.
+
 ## Background processing & durability
 
 `document_service.create_pending_document()` saves the upload and inserts the `Document` row with `status: "processing"`, then returns immediately — the parse/chunk/embed/index pipeline (`run_processing_pipeline()`) runs afterward as a FastAPI `BackgroundTask`, in the same process, after the response is already sent. The client polls `GET /documents/{id}` (or `GET /documents`) until `status` flips to `"ready"` or `"error"`, using `progress` (0-100) to render a progress bar in the meantime.
@@ -259,7 +300,7 @@ docker build -t documind-backend .
 docker run -p 8000:8000 --env-file .env documind-backend
 ```
 
-Mount a volume for `uploads/` and use a real `DATABASE_URL` (e.g. Postgres) for anything beyond local development — SQLite is fine for getting started but doesn't handle concurrent writes well under real load.
+Mount a volume for `uploads/` and use a real `DATABASE_URL` (e.g. Postgres) for anything beyond local development — SQLite is fine for getting started but doesn't handle concurrent writes well under real load, and won't survive a restart at all on platforms with ephemeral container filesystems (Railway included). See "Deploying to the cloud" above.
 
 ## Evaluation
 
